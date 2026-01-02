@@ -19,33 +19,22 @@
         *   `RiskManager`: 专注于风险提示与仓位建议。
     *   **`llm_utils.py`**: 封装了与大模型 (Qwen-2.5-7B) 的交互逻辑，使用 OpenAI SDK 格式进行调用。
 
-3.  **展示层 (Presentation Layer)**
-    *   **Streamlit**: 负责构建 Web 界面 (Sidebar, Tabs, Columns, Metrics)。
-    *   **Plotly**: 负责绘制交互式图表 (K 线图、柱状图、Treemap、散点图)。
+## 🛠️ 关键技术点与问题解决
 
-## 🔧 关键技术细节
+### 1. PyArrow 序列化错误 (Serialization Error)
+*   **问题**: Streamlit 在渲染 DataFrame 时，如果列中包含混合类型 (如既有数字又有字符串)，会抛出 `pyarrow.lib.ArrowInvalid`。
+*   **解决**: 引入 `safe_dataframe(df)` 辅助函数。在调用 `st.dataframe` 前，该函数会将所有 `object` 类型的列强制转换为 `string` 类型，确保类型一致性。
 
-### 1. 数据缓存机制
-为了提高响应速度并避免频繁请求导致 IP 被封，项目中大量使用了 Streamlit 的缓存装饰器 `@st.cache_data`。
-*   `get_stock_list`: 缓存 24 小时 (股票列表变动不频繁)。
-*   `get_industry_peers`: 缓存 1 小时 (行业数据相对稳定)。
-*   `get_market_indices`: 缓存 1 分钟 (保证行情实时性)。
+### 2. 财务图表时间轴排序
+*   **问题**: 财务报表数据转置后，索引为日期字符串，直接绘图会导致 X 轴乱序。
+*   **解决**: 使用 `pd.to_datetime()` 将索引转换为时间对象，并进行 `sort_index()` 排序，确保 Plotly 能正确按时间顺序绘制柱状图。
 
-### 2. PyArrow 兼容性处理
-Streamlit 底层使用 Arrow 进行数据传输。由于金融数据中常包含混合类型 (如股票代码 '000001' 可能被误判为数字)，我们在数据处理阶段显式地将代码列转换为 `string` 类型，避免 `ArrowInvalid` 错误。
-```python
-peers['代码'] = peers['代码'].astype(str)
-```
+### 3. 风险对冲模块 (Risk Hedging)
+*   **实现**: 在 "投资组合助手" 页面，系统首先获取当前市场主要指数的实时数据，将其作为 Context 注入到 Prompt 中。
+*   **Prompt 设计**: 要求 LLM 输出结构化的 Markdown 格式，包含 "市场风险评估" 和具体的 "对冲策略" (逻辑、标的、操作建议)。
 
-### 3. AI 多智能体工作流
-AI 分析流程如下：
-1.  **上下文收集**: 程序自动聚合当前的行情、财务、行业、新闻数据，转换为 Markdown 格式。
-2.  **Prompt 构建**: 为每个 Agent 构建特定的 System Prompt，注入角色设定与任务目标。
-3.  **并行/串行调用**: 依次调用 LLM API 获取各角色的分析结果。
-4.  **综合汇总**: 最后由 "CIO" (首席投资官) 角色汇总所有分析，生成最终建议。
-
-### 4. 风险对冲策略生成
-利用 LLM 的推理能力，结合当前市场指数 (Context)，动态生成结构化的对冲策略。Prompt 中明确要求了输出格式 (Markdown 列表)，以保证前端展示的整洁性。
+### 4. 实时数据源切换
+*   **策略**: 优先使用 AkShare 的 `stock_board_industry_name_em` (东方财富) 获取行业热点，使用 `stock_hsgt_fund_flow_summary_em` 获取北向资金流向，替代了早期的静态示例数据。
 
 ## 📦 依赖库说明
 *   `streamlit`: Web 应用框架。

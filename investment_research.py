@@ -326,6 +326,20 @@ def get_market_indices():
     except Exception as e:
         return pd.DataFrame()
 
+def safe_dataframe(df):
+    """
+    辅助函数：确保DataFrame可以被Streamlit安全渲染，避免PyArrow错误
+    将所有object类型的列强制转换为string
+    """
+    if df is None or df.empty:
+        return df
+    
+    df_out = df.copy()
+    for col in df_out.columns:
+        if df_out[col].dtype == 'object':
+            df_out[col] = df_out[col].astype(str)
+    return df_out
+
 # --- 页面组件 ---
 
 def show_market_overview():
@@ -356,12 +370,51 @@ def show_market_overview():
         st.warning("无法获取实时指数数据，请检查网络连接。")
 
     st.markdown("---")
-    st.markdown("### 市场热点 (示例)")
+    st.markdown("### 市场热点与资金流向")
+    
     col1, col2 = st.columns(2)
+    
     with col1:
-        st.info("🔥 热门行业：人工智能、新能源汽车、半导体")
+        st.subheader("🔥 行业板块涨幅 Top 5")
+        try:
+            # 获取行业板块实时行情
+            df_industry = ak.stock_board_industry_name_em()
+            # 按涨跌幅排序
+            if not df_industry.empty and '涨跌幅' in df_industry.columns:
+                # 确保涨跌幅是数值
+                df_industry['涨跌幅'] = pd.to_numeric(df_industry['涨跌幅'], errors='coerce')
+                top_industries = df_industry.sort_values('涨跌幅', ascending=False).head(5)
+                
+                # 展示
+                for _, row in top_industries.iterrows():
+                    st.markdown(f"**{row['板块名称']}**: <span style='color:red'>+{row['涨跌幅']}%</span> (领涨: {row['领涨股票']})", unsafe_allow_html=True)
+            else:
+                st.info("暂无行业数据")
+        except Exception as e:
+            st.error(f"获取行业数据失败: {e}")
+
     with col2:
-        st.info("💡 资金流向：北向资金今日净流入 50 亿")
+        st.subheader("💡 北向资金流向")
+        try:
+            # 获取北向资金概览
+            # 注意：akshare接口变动频繁，这里使用 stock_hsgt_fund_flow_summary_em
+            df_flow = ak.stock_hsgt_fund_flow_summary_em()
+            if not df_flow.empty:
+                # 只需要展示最新的几条或者当天的
+                # 假设返回包含 '日期', '北向资金', etc.
+                # 实际上这个接口返回的是历史数据还是实时？
+                # 让我们只取最后一行作为今日/最新
+                latest = df_flow.iloc[0] # 通常第一行是最新? 需确认，通常是按时间倒序或正序
+                # 假设第一行是最新
+                
+                # 构造展示数据
+                # 接口返回列名可能为: date, value, etc. 
+                # 让我们先简单展示整个表格的前几行
+                st.dataframe(safe_dataframe(df_flow.head(5)), use_container_width=True, hide_index=True)
+            else:
+                st.info("暂无资金流向数据")
+        except Exception as e:
+            st.error(f"获取资金流向失败: {e}")
 
 def show_stock_research(stock_list):
     st.title("🔍 个股深度研究")
@@ -493,7 +546,7 @@ def show_stock_research(stock_list):
                     st.markdown(f"**总股本:** {info_dict.get('总股本', '-')}")
                     st.markdown(f"**流通股:** {info_dict.get('流通股', '-')}")
                 st.divider()
-                st.dataframe(info, use_container_width=True, hide_index=True)
+                st.dataframe(safe_dataframe(info), use_container_width=True, hide_index=True)
                 
             except Exception:
                 # 备用方案：从实时行情中获取
@@ -543,12 +596,14 @@ def show_stock_research(stock_list):
                     df_T.index.name = '日期'
                     
                     # 转换索引为 datetime 对象，以便正确绘图
+                    # 确保索引是字符串格式的日期
+                    df_T.index = df_T.index.astype(str)
                     df_T.index = pd.to_datetime(df_T.index, errors='coerce')
                     
                     # 只取最近的N个报告期 (前10列 -> 前10行)
                     df_recent = df_T.head(10)
                     
-                    st.dataframe(df_recent, use_container_width=True)
+                    st.dataframe(safe_dataframe(df_recent), use_container_width=True)
                     
                     # 绘图
                     cols = df_recent.columns.tolist()
@@ -585,7 +640,7 @@ def show_stock_research(stock_list):
             if not abstract_df.empty:
                 # 尝试筛选利润表相关 (这里简单展示所有数据，或者筛选特定行)
                 # 由于abstract包含所有，我们展示原始表格的转置版本，方便查看
-                st.dataframe(abstract_df, use_container_width=True)
+                st.dataframe(safe_dataframe(abstract_df), use_container_width=True)
             else:
                 st.info("暂无数据")
 
@@ -1143,13 +1198,17 @@ def show_portfolio_tool(stock_list):
                 Please provide 3-5 hedging strategies or stock categories suitable for the current A-share market environment to reduce portfolio risk.
                 
                 Please structure your answer as follows:
-                1. **Market Analysis**: Brief summary of current market conditions based on indices.
-                2. **Hedging Strategy 1**: [Strategy Name] - [Reasoning] - [Suggested Sector/ETF]
-                3. **Hedging Strategy 2**: ...
-                4. **Hedging Strategy 3**: ...
+                1. **Market Risk Assessment**: Analyze the current market sentiment and risk level (High/Medium/Low) based on the indices.
+                2. **Hedging Strategies**:
+                   *   **Strategy 1**: [Strategy Name]
+                       *   **Logic**: Why this works in the current environment.
+                       *   **Target Assets**: Specific sectors (e.g., Utilities, Banking), ETFs (e.g., Gold, Bond), or defensive stocks.
+                       *   **Action**: Buy/Hold/Reduce exposure.
+                   *   **Strategy 2**: ...
+                   *   **Strategy 3**: ...
                 
                 Consider factors like market volatility, sector rotation, and macro conditions.
-                Output format: Markdown.
+                Output format: Markdown. Please answer in Chinese.
                 """
                 response = call_llm(prompt, "You are a professional risk management expert specializing in the Chinese stock market.")
                 st.markdown(response)
