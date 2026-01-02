@@ -227,6 +227,15 @@ def get_financial_report_em(code, report_type='zcfzb'):
     return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
+def get_all_stock_spot_data():
+    """获取全市场实时行情数据 (带缓存)"""
+    try:
+        return ak.stock_zh_a_spot_em()
+    except Exception as e:
+        print(f"Error fetching spot data: {e}")
+        return pd.DataFrame()
+
+@st.cache_data(ttl=3600)
 def get_industry_peers(stock_code, stock_name):
     """获取同行业对比数据及行业指数历史"""
     try:
@@ -241,12 +250,24 @@ def get_industry_peers(stock_code, stock_name):
         # 2. 获取行业内成分股
         peers = ak.stock_board_industry_cons_em(symbol=industry)
         
+        # 补充总市值数据 (如果缺失)
+        if not peers.empty and '总市值' not in peers.columns:
+            spot_data = get_all_stock_spot_data()
+            if not spot_data.empty and '总市值' in spot_data.columns:
+                # 确保代码列格式一致
+                peers['代码'] = peers['代码'].astype(str)
+                spot_data['代码'] = spot_data['代码'].astype(str)
+                
+                # 合并总市值
+                peers = pd.merge(peers, spot_data[['代码', '总市值']], on='代码', how='left')
+
         # 3. 获取行业指数历史
         industry_hist = pd.DataFrame()
         try:
             # 获取当前年份
             current_year = datetime.now().year
-            start_date = f"{current_year}0101"
+            # 为了避免年初无数据导致报错，获取近两年的数据
+            start_date = f"{current_year-1}0101"
             end_date = f"{current_year}1231"
             industry_hist = ak.stock_board_industry_hist_em(symbol=industry, start_date=start_date, end_date=end_date, period="日k", adjust="qfq")
         except Exception as e:
@@ -261,21 +282,16 @@ def get_industry_peers(stock_code, stock_name):
             if peers[col].dtype == 'object':
                 peers[col] = peers[col].astype(str)
 
-        return industry, peers, industry_hist
-    except Exception as e:
-        print(f"Industry API error: {e}")
-        return None, pd.DataFrame(), pd.DataFrame()
-        
-        # 3. 清洗数据
         # 确保数值列为数值类型
         numeric_cols = ['最新价', '涨跌幅', '换手率', '市盈率-动态', '市净率', '总市值']
         for col in numeric_cols:
             if col in peers.columns:
                 peers[col] = pd.to_numeric(peers[col], errors='coerce')
-        
-        # 计算总市值 (如果接口没返回，可以用 最新价 * 总股本，这里假设接口返回了或我们只用PE/PB)
-        # 注意：stock_board_industry_cons_em 返回的列可能不包含总市值，需检查
-        # 如果没有总市值，我们可能需要额外获取，或者仅比较PE/PB/涨跌幅
+
+        return industry, peers, industry_hist
+    except Exception as e:
+        print(f"Industry API error: {e}")
+        return None, pd.DataFrame(), pd.DataFrame()
         
         return industry, peers
     except Exception as e:
@@ -753,17 +769,17 @@ def show_stock_research(stock_list):
                 peers['市值排名'] = peers['总市值'].rank(ascending=False)
                 peers['净利润排名'] = peers['估算净利润'].rank(ascending=False)
                 
-                # 获取当前股票数据
-                # current_stock = peers[peers['代码'] == selected_stock_code]
-                # curr_row = None
-                # if not current_stock.empty:
-                #     curr_row = current_stock.iloc[0]
+                # 更新 curr_row 以包含新计算的排名列
+                if curr_row is not None:
+                    current_stock = peers[peers['代码'] == selected_stock_code]
+                    if not current_stock.empty:
+                        curr_row = current_stock.iloc[0]
                     
                 total_peers = len(peers)
                     
                 # 1. 行业指数走势
                 if not industry_hist.empty:
-                    st.markdown("#### 📈 行业指数走势 (今年以来)")
+                    st.markdown("#### 📈 行业指数走势 (近两年)")
                     fig_ind = px.line(industry_hist, x='日期', y='收盘', title=f"{industry}行业指数趋势")
                     fig_ind.update_layout(xaxis_title="日期", yaxis_title="指数点位")
                     st.plotly_chart(fig_ind, use_container_width=True)
@@ -809,7 +825,7 @@ def show_stock_research(stock_list):
                     path=['行业', '名称'],
                     values='总市值',
                     color='涨跌幅',
-                    color_continuous_scale='RdGn_r', # 红绿配色 (红跌绿涨? A股是红涨绿跌)
+                    color_continuous_scale='RdYlGn_r', # 红绿配色 (红跌绿涨? A股是红涨绿跌)
                     # A股习惯: 红涨(正) 绿跌(负). Plotly RdGn 是红(高)到绿(低).
                     # 我们需要: 负数(跌) -> 绿色, 正数(涨) -> 红色.
                     # Plotly RdGn: Red(High) -> Green(Low)? No.
@@ -887,8 +903,6 @@ def show_stock_research(stock_list):
                         ),
                     }
                 )
-
-            st.divider()
 
             # 5. 估值分布 (Box Plot + Scatter)
             st.markdown("#### 🎯 估值分布")
